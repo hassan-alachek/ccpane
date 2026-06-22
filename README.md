@@ -43,6 +43,8 @@ go install github.com/hassan-alachek/ccpane@latest   # or, in a clone: go instal
 ```sh
 ccpane                 # live pane for the active session in the current dir
 ccpane -b              # browse every session, grouped by directory
+ccpane -stats          # usage stats & graphs (filter: 7d / 30d / 60d / all)
+ccpane -m              # browse project auto-memories and inspect them
 ccpane -f FILE.jsonl   # open a specific transcript
 ccpane -export out.html [-f FILE]   # write the shareable HTML tree and exit
 ccpane -stat           # print the session (summary + tree) as text; no TUI
@@ -80,7 +82,17 @@ bind C-p split-window -h -l 40% -c "#{pane_current_path}" "ccpane"
 - `↑/↓` move · `enter` open a session / toggle a directory group
 - `r` **resume** the selected session in Claude Code (cd's into its original dir first)
 - `e` **export** the selected session to HTML
-- `/` **search** (filter by title or path) · `esc` clear · `q` quit
+- `s` **stats** · `m` **memories** · `/` **search** · `esc` clear · `q` quit
+
+**Stats** (`ccpane -stats`, or `s` from the browser)
+- `1` 7d · `2` 30d · `3` 60d · `4` all time · `tab` cycle · `↑/↓` scroll · `q` back
+- Token counts use k/M/**B** notation; overview, token composition, a 30/60/90-day
+  activity sparkline, and top-projects + models bar charts.
+
+**Memory** (`ccpane -m`, or `m` from the browser)
+- Browses Claude Code's per-project auto-memory (`~/.claude/projects/<project>/memory/`).
+- `↑/↓` move · `enter` drill in (project → memory file → rendered markdown)
+- `r` toggle **rendered ⇄ raw** · `esc` up a level · `q` back
 
 ## How features work
 

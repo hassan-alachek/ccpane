@@ -21,6 +21,7 @@ type Session struct {
 	OutputTokens  int    `json:"outputTokens"`
 	CacheCreation int    `json:"cacheCreation"`
 	CacheRead     int    `json:"cacheRead"`
+	Model         string `json:"model"`
 	Mtime         int64  `json:"mtime"`
 	Size          int64  `json:"size"`
 }
@@ -87,6 +88,7 @@ func ScanSession(path string) *Session {
 		OutputTokens:  st.OutputTokens,
 		CacheCreation: st.CacheCreation,
 		CacheRead:     st.CacheRead,
+		Model:         st.Model,
 	}
 	for _, r := range recs {
 		if r.SessionID != "" && s.SessionID == "" {
@@ -157,7 +159,7 @@ func IndexSessions() []*Session {
 // cachePath is versioned so schema changes invalidate stale caches cleanly.
 func cachePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "ccpane-index.v2.json")
+	return filepath.Join(home, ".claude", "ccpane-index.v3.json")
 }
 
 func loadCache() map[string]*Session {

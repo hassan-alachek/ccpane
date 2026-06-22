@@ -184,6 +184,10 @@ func (m browserModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.status = "exported → " + out
 				}
 			}
+		case "s":
+			return newStatsModel(m.limit, m.width, m.height, false), nil
+		case "m":
+			return newMemoryModel(m.limit, m.width, m.height, false), nil
 		case "/":
 			m.searching = true
 			m.search.Focus()
@@ -252,7 +256,7 @@ func (m browserModel) View() string {
 		h = 30
 	}
 	top := m.topBar(w)
-	help := clip(stDim.Render("↑/↓ move · enter open · r resume · e export · / search · q quit"), w)
+	help := clip(stDim.Render("↑/↓ move · enter open · r resume · e export · s stats · m memory · / search · q quit"), w)
 	if m.status != "" {
 		help = clip(lipgloss.NewStyle().Foreground(cGreen).Render(m.status), w)
 	}

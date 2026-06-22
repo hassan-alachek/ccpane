@@ -42,12 +42,35 @@ func main() {
 	exportPath := flag.String("export", "", "export the session tree to an HTML file and exit")
 	render := flag.String("render", "", "debug: render a view at WxH to stdout (e.g. 120x40)")
 	query := flag.String("q", "", "debug: pre-fill the browser search filter")
+	statsFlag := flag.Bool("stats", false, "show usage stats and graphs")
+	memFlag := flag.Bool("memory", false, "browse project auto-memories")
+	flag.BoolVar(memFlag, "m", false, "shorthand for --memory")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.BoolVar(showVer, "v", false, "print version (shorthand)")
 	flag.Parse()
 
 	if *showVer {
 		fmt.Println("ccpane", versionString())
+		return
+	}
+
+	if *statsFlag {
+		if *render != "" {
+			w, h := parseWH(*render)
+			rd, _ := strconv.Atoi(*query)
+			ui.DebugStats(*limit, w, h, rd)
+			return
+		}
+		fail(ui.RunStats(*limit))
+		return
+	}
+	if *memFlag {
+		if *render != "" {
+			w, h := parseWH(*render)
+			ui.DebugMemory(*limit, w, h, *query)
+			return
+		}
+		fail(ui.RunMemory(*limit))
 		return
 	}
 

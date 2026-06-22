@@ -82,6 +82,28 @@ func FindActiveTranscript(cwd string) string {
 	return best
 }
 
+// CwdForProjectDir returns the real cwd recorded by transcripts in a project
+// dir (used to label memory directories, whose names are lossily mangled).
+func CwdForProjectDir(dir string) string {
+	if p := newestJSONL(dir); p != "" {
+		if c := peekCwd(p); c != "" {
+			return c
+		}
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".jsonl") {
+			if c := peekCwd(filepath.Join(dir, e.Name())); c != "" {
+				return c
+			}
+		}
+	}
+	return ""
+}
+
 // SubagentDir returns the directory holding a session's subagent transcripts.
 func SubagentDir(mainPath string) string {
 	return strings.TrimSuffix(mainPath, ".jsonl") + string(os.PathSeparator) + "subagents"
