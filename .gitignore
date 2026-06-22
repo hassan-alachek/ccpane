@@ -1,0 +1,13 @@
+# build artifacts
+/ccpane
+/ccpane.exe
+/dist/
+
+# goreleaser local snapshots
+/dist
+
+# local-only maintainer notes (release runbook, etc.)
+/docs/
+
+# exported chat trees
+*.html
