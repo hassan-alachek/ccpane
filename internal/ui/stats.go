@@ -161,13 +161,11 @@ func (m statsModel) content(w int) string {
 	b.WriteString("  " + stDim.Render("tokens   ") + accent(cCyan, fmtTok(total)) +
 		stDim.Render("  ("+fmtTok(in)+" in · "+fmtTok(out)+" out · "+fmtTok(cache)+" cache)") + "\n")
 	b.WriteString("  " + stDim.Render("est cost ") + accent(cYellow, "~"+money(cost)) +
-		stDim.Render("  (placeholder rates)") + "\n\n")
+		stDim.Render("  "+priceNote()) + "\n\n")
 
 	b.WriteString(sectionTitle("Token composition") + "\n  ")
-	b.WriteString(compositionBar(in, out, cache, max(10, w-4)) + "\n  ")
-	b.WriteString(accent(cAccent, "█") + stDim.Render(" input  ") +
-		accent(cGreen, "█") + stDim.Render(" output  ") +
-		accent(cDim, "█") + stDim.Render(" cache") + "\n\n")
+	b.WriteString(compositionBar(in, out, cache, max(10, w-4)) + "\n")
+	b.WriteString(compLegend(in, out, cache) + "\n\n")
 
 	sparkDays := m.rangeDays
 	if sparkDays == 0 {
@@ -220,18 +218,67 @@ func accent(c lipgloss.Color, s string) string { return lipgloss.NewStyle().Fore
 
 func compositionBar(in, out, cache, width int) string {
 	total := in + out + cache
-	if total <= 0 {
+	if total <= 0 || width <= 0 {
 		return stDim.Render("(no data)")
 	}
-	wi := in * width / total
-	wo := out * width / total
-	wc := width - wi - wo
-	if wc < 0 {
-		wc = 0
+	vals := []int{in, out, cache}
+	cols := []lipgloss.Color{cAccent, cGreen, cDim}
+	w := make([]int, 3)
+	used := 0
+	for i, v := range vals {
+		w[i] = v * width / total
+		if v > 0 && w[i] == 0 {
+			w[i] = 1 // keep tiny segments visible
+		}
+		used += w[i]
 	}
-	return accent(cAccent, strings.Repeat("█", wi)) +
-		accent(cGreen, strings.Repeat("█", wo)) +
-		accent(cDim, strings.Repeat("█", wc))
+	for used > width { // trim from the largest segment
+		bi := 0
+		for i := range w {
+			if w[i] > w[bi] {
+				bi = i
+			}
+		}
+		if w[bi] <= 1 {
+			break
+		}
+		w[bi]--
+		used--
+	}
+	for used < width { // pad the largest segment
+		bi := 0
+		for i := range w {
+			if w[i] > w[bi] {
+				bi = i
+			}
+		}
+		w[bi]++
+		used++
+	}
+	var b strings.Builder
+	for i := range vals {
+		b.WriteString(accent(cols[i], strings.Repeat("█", w[i])))
+	}
+	return b.String()
+}
+
+func compLegend(in, out, cache int) string {
+	total := in + out + cache
+	if total == 0 {
+		total = 1
+	}
+	pct := func(v int) string { return fmt.Sprintf("%.1f%%", float64(v)/float64(total)*100) }
+	return "  " +
+		accent(cAccent, "█") + stDim.Render(" input "+fmtTok(in)+" "+pct(in)+"   ") +
+		accent(cGreen, "█") + stDim.Render(" output "+fmtTok(out)+" "+pct(out)+"   ") +
+		accent(cDim, "█") + stDim.Render(" cache "+fmtTok(cache)+" "+pct(cache))
+}
+
+func priceNote() string {
+	if transcript.PricingLoaded() {
+		return "(LiteLLM pricing)"
+	}
+	return "(estimate)"
 }
 
 func spark(day map[string]int, days int) string {

@@ -182,7 +182,7 @@ func (sv *sessionView) header() string {
 		barStyle(pct).Render(pctStr(pct)) + " " +
 		stDim.Render(fmtTok(sv.stats.ContextNow)+"/"+fmtTok(win))
 	ctxR := stDim.Render("out ") + stFg.Render(fmtTok(sv.stats.OutputTokens)) + "  " +
-		lipgloss.NewStyle().Foreground(cYellow).Render("~"+money(sv.stats.EstCost(transcript.DefaultPricing)))
+		lipgloss.NewStyle().Foreground(cYellow).Render("~"+money(sv.stats.EstCost(transcript.PricingFor(sv.stats.Model))))
 	line2 := spread(ctxL, ctxR, w)
 
 	meta := []string{}

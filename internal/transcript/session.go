@@ -31,14 +31,14 @@ func (s *Session) TotalTokens() int {
 	return s.InputTokens + s.OutputTokens + s.CacheCreation + s.CacheRead
 }
 
-// Cost is the estimated USD cost using DefaultPricing.
+// Cost is the estimated USD cost using the model's resolved rates.
 func (s *Session) Cost() float64 {
 	return Stats{
 		InputTokens:   s.InputTokens,
 		OutputTokens:  s.OutputTokens,
 		CacheCreation: s.CacheCreation,
 		CacheRead:     s.CacheRead,
-	}.EstCost(DefaultPricing)
+	}.EstCost(PricingFor(s.Model))
 }
 
 // Group is a set of sessions sharing a project directory.

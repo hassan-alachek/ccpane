@@ -45,6 +45,7 @@ ccpane                 # live pane for the active session in the current dir
 ccpane -b              # browse every session, grouped by directory
 ccpane -stats          # usage stats & graphs (filter: 7d / 30d / 60d / all)
 ccpane -m              # browse project auto-memories and inspect them
+ccpane -update         # self-update to the latest release
 ccpane -f FILE.jsonl   # open a specific transcript
 ccpane -export out.html [-f FILE]   # write the shareable HTML tree and exit
 ccpane -stat           # print the session (summary + tree) as text; no TUI

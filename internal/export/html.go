@@ -45,7 +45,7 @@ func WriteHTML(path string, window int, outPath string) (string, error) {
 		Context:   st.ContextNow,
 		Window:    window,
 		OutTokens: st.OutputTokens,
-		Cost:      st.EstCost(transcript.DefaultPricing),
+		Cost:      st.EstCost(transcript.PricingFor(st.Model)),
 		Turns:     st.Turns,
 	}, transcript.FullTree(path))
 	if err := os.WriteFile(abs, []byte(doc), 0o644); err != nil {

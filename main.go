@@ -10,8 +10,10 @@ import (
 	"syscall"
 
 	"github.com/hassan-alachek/ccpane/internal/export"
+	"github.com/hassan-alachek/ccpane/internal/pricing"
 	"github.com/hassan-alachek/ccpane/internal/transcript"
 	"github.com/hassan-alachek/ccpane/internal/ui"
+	"github.com/hassan-alachek/ccpane/internal/update"
 )
 
 // Build info, injected via -ldflags at release time.
@@ -45,6 +47,7 @@ func main() {
 	statsFlag := flag.Bool("stats", false, "show usage stats and graphs")
 	memFlag := flag.Bool("memory", false, "browse project auto-memories")
 	flag.BoolVar(memFlag, "m", false, "shorthand for --memory")
+	updateFlag := flag.Bool("update", false, "update ccpane to the latest release and exit")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.BoolVar(showVer, "v", false, "print version (shorthand)")
 	flag.Parse()
@@ -53,6 +56,16 @@ func main() {
 		fmt.Println("ccpane", versionString())
 		return
 	}
+
+	if *updateFlag {
+		if err := update.Run(version); err != nil {
+			fmt.Fprintln(os.Stderr, "ccpane:", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	pricing.Load() // dynamic per-model rates (LiteLLM, 24h cached); no-op if offline
 
 	if *statsFlag {
 		if *render != "" {

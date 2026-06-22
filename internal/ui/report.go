@@ -29,7 +29,7 @@ func PrintSessionStat(path string, limit int) {
 	fmt.Printf("Model   : %s\n", st.Model)
 	fmt.Printf("Context : %d / %d tokens (%.0f%%)  [window auto]\n", st.ContextNow, win, pct)
 	fmt.Printf("Tokens  : in %d  out %d  cacheW %d  cacheR %d\n", st.InputTokens, st.OutputTokens, st.CacheCreation, st.CacheRead)
-	fmt.Printf("Turns   : %d   est cost ~$%.2f\n\n", st.Turns, st.EstCost(transcript.DefaultPricing))
+	fmt.Printf("Turns   : %d   est cost ~$%.2f\n\n", st.Turns, st.EstCost(transcript.PricingFor(st.Model)))
 
 	for _, line := range transcript.RenderTreeLines(transcript.FullTree(path)) {
 		fmt.Println(line)

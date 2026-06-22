@@ -1,5 +1,7 @@
 package transcript
 
+import "strings"
+
 // Usage mirrors message.usage in the transcript.
 type Usage struct {
 	InputTokens              int `json:"input_tokens"`
@@ -85,4 +87,66 @@ func (s Stats) EstCost(p Pricing) float64 {
 		float64(s.OutputTokens)/1e6*p.OutputPerM +
 		float64(s.CacheCreation)/1e6*p.CacheWritePerM +
 		float64(s.CacheRead)/1e6*p.CacheReadPerM
+}
+
+// modelPricing holds per-model rates (e.g. fetched from LiteLLM), keyed by the
+// model id's base name. nil/empty means "use DefaultPricing".
+var modelPricing map[string]Pricing
+
+// SetModelPricing installs a dynamic model->rates table.
+func SetModelPricing(m map[string]Pricing) { modelPricing = m }
+
+// PricingLoaded reports whether a dynamic pricing table is installed.
+func PricingLoaded() bool { return len(modelPricing) > 0 }
+
+// PricingFor resolves rates for a model id: exact match, then date-stripped,
+// then a same-family prefix match; falls back to DefaultPricing.
+func PricingFor(model string) Pricing {
+	if len(modelPricing) == 0 || model == "" {
+		return DefaultPricing
+	}
+	if p, ok := modelPricing[model]; ok {
+		return p
+	}
+	stripped := stripModelDate(model)
+	if p, ok := modelPricing[stripped]; ok {
+		return p
+	}
+	fam := familyModelKey(stripped)
+	var best string
+	for k := range modelPricing {
+		if kk := stripModelDate(k); strings.HasPrefix(kk, fam) && len(kk) > len(best) {
+			best = k
+		}
+	}
+	if best != "" {
+		return modelPricing[best]
+	}
+	return DefaultPricing
+}
+
+// stripModelDate removes a trailing -YYYYMMDD suffix.
+func stripModelDate(s string) string {
+	if i := strings.LastIndexByte(s, '-'); i >= 0 && len(s)-i-1 == 8 {
+		for _, c := range s[i+1:] {
+			if c < '0' || c > '9' {
+				return s
+			}
+		}
+		return s[:i]
+	}
+	return s
+}
+
+// familyModelKey drops a trailing -<number> segment (claude-opus-4-8 -> claude-opus-4).
+func familyModelKey(s string) string {
+	if i := strings.LastIndexByte(s, '-'); i >= 0 {
+		for _, c := range s[i+1:] {
+			if c < '0' || c > '9' {
+				return s
+			}
+		}
+		return s[:i]
+	}
+	return s
 }
