@@ -141,14 +141,22 @@ bind C-p split-window -h -l 40% -c "#{pane_current_path}" "ccpane"
   requires; the result matches the `cost-state` record Claude Code writes for
   itself. Note `/usage` → Stats does *not* dedupe, so it reads ~2x higher — the
   overview shows both so the difference is explicit.
-- **Cost** is an **estimate**, priced per model from LiteLLM's public table
-  (cached 24h at `~/.claude/ccpane-pricing.json`), preferring first-party
-  Anthropic rates over provider/region variants.
+- **Cost** is **list price for the tokens used**, priced per model from
+  LiteLLM's public table (cached 24h at `~/.claude/ccpane-pricing.json`),
+  preferring first-party Anthropic rates over provider/region variants. On a
+  Claude subscription it is *not* what you paid — you paid the subscription fee.
+  Read it as "what this usage would cost at API rates".
+- **Lifetime totals**, in the *all time* range, come from Claude Code's own
+  cumulative `stats-cache.json` — the only surviving record of sessions whose
+  transcripts it has deleted. Those counts are undeduplicated, so ccpane
+  rescales them per model and per token kind by the ratio it measures on the
+  transcripts still on disk, and shows both figures. It is an estimate, and
+  assumes deleted sessions resembled the surviving ones.
 - **Where the tokens go**: the stats view attributes usage to main loop vs
   subagents (a true partition), then by subagent, skill, MCP server and MCP
   tool, read from the `attribution*` fields Claude Code stamps on each turn.
   Those four overlap — a skill calling an MCP tool counts under both.
-- **Index cache** at `~/.claude/ccpane-index.v4.json`, keyed by file
+- **Index cache** at `~/.claude/ccpane-index.v5.json`, keyed by file
   mtime+size (transcript plus its subagent files). First scan of all sessions takes a few seconds; after that it's
   ~instant. (Kept as JSON rather than SQLite: at this scale it's already
   <20ms and keeps the binary cgo-free and portable.)
@@ -167,9 +175,10 @@ bind C-p split-window -h -l 40% -c "#{pane_current_path}" "ccpane"
 - Subagents are loaded from `<session>/subagents/` and shown as their own
   subtrees; not yet linked to the exact `Task` call that spawned them.
 - The live pane re-reads the whole transcript on change (fine at these sizes).
-- Stats cover transcripts still on disk. Claude Code's own all-time counters
-  keep counting sessions whose transcripts it has since deleted, so its totals
-  are larger; the overview says what range the surviving files actually cover.
+- Per-day, per-project and per-attribution stats cover transcripts still on
+  disk; the overview says what range those actually span. Only the lifetime
+  totals reach further back, and only as a rescaled estimate from Claude Code's
+  cumulative cache.
 
 ## Layout
 

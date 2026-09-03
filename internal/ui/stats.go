@@ -128,8 +128,9 @@ type rangeAgg struct {
 	models   transcript.ModelTokens
 	proj     map[string]*statAgg
 	attr     map[string]transcript.ModelTokens // attribution key -> per-model usage
+	raw      transcript.ModelTokens            // undeduplicated (what /usage shows)
 	perDay   map[string]int                    // deduplicated tokens per UTC day
-	rawTotal int                               // undeduplicated total (what /usage shows)
+	rawTotal int                               // undeduplicated total
 	sessions int
 	files    int    // transcripts on disk, including ones with no billable usage
 	firstDay string // earliest UTC day any surviving transcript covers
@@ -155,6 +156,7 @@ func (m statsModel) aggregate() rangeAgg {
 		models: transcript.ModelTokens{},
 		proj:   map[string]*statAgg{},
 		attr:   map[string]transcript.ModelTokens{},
+		raw:    transcript.ModelTokens{},
 		perDay: map[string]int{},
 	}
 	for _, s := range m.sessions {
@@ -194,10 +196,12 @@ func (m statsModel) aggregate() rangeAgg {
 		pa.cost += cost
 		pa.n++
 
-		for d, rows := range s.Rows {
-			if m.inRange(d) {
-				a.rawTotal += rows
+		for d, mt := range s.Rows {
+			if !m.inRange(d) {
+				continue
 			}
+			a.raw.Merge(mt)
+			a.rawTotal += mt.Total().Total()
 		}
 		for d, byKey := range s.Attr {
 			if !m.inRange(d) {
@@ -269,6 +273,43 @@ func (m statsModel) content(w int) string {
 
 	b.WriteString(sectionTitle("Models by tokens") + "\n")
 	b.WriteString(modelBars(a.models, w))
+
+	if m.rangeDays == 0 {
+		if lt := transcript.LoadLifetime(); lt != nil {
+			b.WriteString("\n" + lifetimeSection(lt, a, w))
+		}
+	}
+	return b.String()
+}
+
+// lifetimeSection reports Claude Code's cumulative record, which still counts
+// the sessions whose transcripts it has deleted. Its figures are
+// undeduplicated, so a corrected estimate is shown beside them.
+func lifetimeSection(lt *transcript.Lifetime, a rangeAgg, w int) string {
+	est := lt.Deflate(a.raw, a.models)
+	rawTot, estTot := lt.Raw.Total(), est.Total()
+
+	var b strings.Builder
+	b.WriteString(sectionTitle("Lifetime — includes deleted sessions") + "\n")
+	line := "  " + stDim.Render("sessions ") + stFg.Render(count(lt.Sessions))
+	if lt.FirstDay != "" {
+		line += stDim.Render("    since ") + stFg.Render(lt.FirstDay)
+	}
+	if lt.Through != "" {
+		line += stDim.Render("    through ") + stFg.Render(lt.Through)
+	}
+	b.WriteString(line + "\n")
+	b.WriteString("  " + stDim.Render("tokens   ") + accent(cCyan, fmtTok(estTot.Total())) +
+		stDim.Render(" estimated  ·  ") + fmtTok(rawTot.Total()) + stDim.Render(" as Claude Code counted it") + "\n")
+	b.WriteString("  " + stDim.Render("list px  ") + accent(cYellow, "~"+money(est.Cost())) +
+		stDim.Render("  ·  ~") + money(lt.Raw.Cost()) + stDim.Render(" at its own counts") + "\n")
+	b.WriteString("  " + stDim.Render("ⓘ read from Claude Code's cumulative cache, the only record left of") + "\n")
+	b.WriteString("  " + stDim.Render("  deleted sessions. It counts each API response once per transcript") + "\n")
+	b.WriteString("  " + stDim.Render("  row, so the estimate rescales it per model by the ratio measured") + "\n")
+	b.WriteString("  " + stDim.Render("  on surviving transcripts — good only if deleted sessions looked") + "\n")
+	b.WriteString("  " + stDim.Render("  like the ones still here.") + "\n\n")
+	b.WriteString("  " + stDim.Render("estimated lifetime by model") + "\n")
+	b.WriteString(modelBars(est, w))
 	return b.String()
 }
 
@@ -435,11 +476,14 @@ func compLegend(t transcript.Tokens) string {
 		accent(cDim, "█") + stDim.Render(" cache "+fmtTok(t.Cache())+" "+pct(t.Cache()))
 }
 
+// priceNote labels the cost figure. It is list price for the tokens used, per
+// model — on a Claude subscription that is emphatically not what you paid, so
+// the label says so rather than implying a bill.
 func priceNote() string {
 	if transcript.PricingLoaded() {
-		return "(LiteLLM pricing, per model)"
+		return "(list price, per model — not your bill)"
 	}
-	return "(estimate)"
+	return "(list-price estimate — not your bill)"
 }
 
 // spark plots tokens per day over the trailing window.

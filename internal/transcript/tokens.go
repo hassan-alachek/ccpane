@@ -177,9 +177,10 @@ func AggregateSession(path string, recs []*Record, sink *Sink, exclude map[strin
 type Sink struct {
 	// Daily is deduplicated usage by UTC day and model.
 	Daily map[string]ModelTokens
-	// Rows is the undeduplicated per-day token total: what Claude Code's
-	// /usage Stats tab reports.
-	Rows map[string]int
+	// Rows is undeduplicated usage by UTC day and model — what Claude Code's
+	// /usage Stats tab reports. Kept per model so the inflation ratio can be
+	// measured per model, which is what corrects its cumulative cache.
+	Rows map[string]ModelTokens
 	// Attr is deduplicated usage by UTC day, attribution key and model.
 	Attr map[string]map[string]ModelTokens
 	// IDs collects the message id of every response counted, in scan order.
@@ -190,7 +191,7 @@ type Sink struct {
 func NewSink() *Sink {
 	return &Sink{
 		Daily: map[string]ModelTokens{},
-		Rows:  map[string]int{},
+		Rows:  map[string]ModelTokens{},
 		Attr:  map[string]map[string]ModelTokens{},
 	}
 }
@@ -245,7 +246,10 @@ func accumulate(records []*Record, dropSidechain bool, seen map[string]bool, exc
 		if sink != nil && sink.Rows != nil && day != "" {
 			var raw Tokens
 			raw.addResponse(r.Message.Usage)
-			sink.Rows[day] += raw.Total()
+			if sink.Rows[day] == nil {
+				sink.Rows[day] = ModelTokens{}
+			}
+			sink.Rows[day].Add(model, raw)
 		}
 		if id := r.Message.ID; id != "" {
 			if seen[id] {

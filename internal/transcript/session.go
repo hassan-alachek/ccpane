@@ -25,9 +25,10 @@ type Session struct {
 	// filter on it, so a long session's tokens land on the days they were
 	// actually spent instead of all on its last day.
 	Daily map[string]ModelTokens `json:"daily"`
-	// Rows is the undeduplicated per-day total: what Claude Code's /usage
-	// Stats tab reports. Kept so the pane can show that difference.
-	Rows map[string]int `json:"rows"`
+	// Rows is undeduplicated usage by UTC day and model: what Claude Code's
+	// /usage Stats tab reports. Kept so the pane can show that difference and
+	// measure the per-model inflation of Claude Code's cumulative cache.
+	Rows map[string]ModelTokens `json:"rows"`
 	// Attr is deduplicated usage by UTC day, attribution key
 	// ("agent:Explore", "skill:artifact-design", "mcp:datadog", ...) and model.
 	Attr map[string]map[string]ModelTokens `json:"attr"`
@@ -254,10 +255,11 @@ func sessionStamp(path string) (mtime, size int64) {
 }
 
 // cachePath is versioned so schema changes invalidate stale caches cleanly.
-// v4: per-day/per-model buckets, deduplicated by message id.
+// v5: per-day/per-model buckets, deduplicated by message id, with the
+// undeduplicated rows kept per model too.
 func cachePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "ccpane-index.v4.json")
+	return filepath.Join(home, ".claude", "ccpane-index.v5.json")
 }
 
 func loadCache() map[string]*Session {

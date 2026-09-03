@@ -80,8 +80,11 @@ func TestSinkBucketsByDayModelAndAttribution(t *testing.T) {
 		t.Errorf("09-02 haiku requests = %d, want 1", n)
 	}
 	// Rows is the undeduplicated total, i.e. what /usage reports.
-	if sink.Rows["2026-09-01"] != 3*u.Total() {
-		t.Errorf("Rows[09-01] = %d, want %d (three rows, uncollapsed)", sink.Rows["2026-09-01"], 3*u.Total())
+	if got := sink.Rows["2026-09-01"].Total().Total(); got != 3*u.Total() {
+		t.Errorf("Rows[09-01] = %d, want %d (three rows, uncollapsed)", got, 3*u.Total())
+	}
+	if got := sink.Rows["2026-09-01"]["claude-opus-5"].Total(); got != 3*u.Total() {
+		t.Errorf("Rows[09-01][opus] = %d, want %d (kept per model)", got, 3*u.Total())
 	}
 	skill := sink.Attr["2026-09-01"][AttrKey(AttrSkill, "artifact-design")].Total()
 	if skill.Total() != u.Total() {
