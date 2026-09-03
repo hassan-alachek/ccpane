@@ -45,6 +45,7 @@ ccpane                 # live pane for the active session in the current dir
 ccpane -b              # browse every session, grouped by directory
 ccpane -stats          # usage stats & graphs (filter: 7d / 30d / 60d / all)
 ccpane -m              # browse project auto-memories and inspect them
+ccpane -snapshot       # archive every transcript to a timestamped tar.gz
 ccpane -update         # self-update to the latest release
 ccpane -f FILE.jsonl   # open a specific transcript
 ccpane -export out.html [-f FILE]   # write the shareable HTML tree and exit
@@ -54,6 +55,34 @@ ccpane -b -stat        # print the grouped session index as text
 # flags
 -limit N   context-window size for the bar. 0 = auto-detect 200k vs 1M (default)
 -dir PATH  directory whose active session to open (default: current dir)
+-out PATH  snapshot destination: a directory, or an explicit .tar.gz path
+```
+
+### Keep your transcripts
+
+Claude Code deletes transcripts older than `cleanupPeriodDays` (**30 by
+default**), so a session's full record is temporary. `ccpane -snapshot` copies
+them out:
+
+```sh
+ccpane -snapshot
+# snapshot → ~/Library/Application Support/ccpane/snapshots/ccpane-transcripts-20260903-160810.tar.gz
+#   169 transcripts (135 sessions · 34 subagents)  2026-08-05 → 2026-09-03
+#   156.5 MB compressed from 418.8 MB  · includes Claude Code's cumulative stats-cache.json
+```
+
+It only ever reads — nothing is moved or deleted — and writes outside
+`~/.claude` so a later sweep of that directory cannot reach it. The archive
+holds `projects/` (every transcript, subagents included), Claude Code's
+`stats-cache.json` (whose aggregates outlive the transcripts it deletes), and a
+`ccpane-snapshot.json` manifest. Default location is the platform data dir
+(`~/Library/Application Support/ccpane/snapshots` on macOS,
+`$XDG_DATA_HOME/ccpane/snapshots` elsewhere); override with `-out`.
+
+To stop the deletion instead, set a long retention in `~/.claude/settings.json`:
+
+```json
+{ "cleanupPeriodDays": 3650 }
 ```
 
 ### Open your current session
@@ -104,10 +133,23 @@ bind C-p split-window -h -l 40% -c "#{pane_current_path}" "ccpane"
 - **Resume from anywhere**: `r` exits ccpane and `exec`s `claude --resume <id>`
   after `cd`-ing to the session's recorded directory — so it resumes in the
   right project even if you started ccpane elsewhere.
-- **Cost** is an **estimate**. Rates are in `internal/transcript/tokens.go`
-  (`DefaultPricing`); edit them to match current model pricing.
-- **Index cache** at `~/.claude/ccpane-index.v2.json`, keyed by file
-  mtime+size. First scan of all sessions takes a few seconds; after that it's
+- **Token counting** collapses each API response to one count. Claude Code
+  writes one transcript row per content block of an assistant turn (thinking,
+  text, each `tool_use`) and copies the whole response's `usage` onto every one
+  of them, so summing rows over-counts ~2x. ccpane dedupes by `message.id`, as
+  [Anthropic's cost-tracking guide](https://code.claude.com/docs/en/agent-sdk/cost-tracking)
+  requires; the result matches the `cost-state` record Claude Code writes for
+  itself. Note `/usage` → Stats does *not* dedupe, so it reads ~2x higher — the
+  overview shows both so the difference is explicit.
+- **Cost** is an **estimate**, priced per model from LiteLLM's public table
+  (cached 24h at `~/.claude/ccpane-pricing.json`), preferring first-party
+  Anthropic rates over provider/region variants.
+- **Where the tokens go**: the stats view attributes usage to main loop vs
+  subagents (a true partition), then by subagent, skill, MCP server and MCP
+  tool, read from the `attribution*` fields Claude Code stamps on each turn.
+  Those four overlap — a skill calling an MCP tool counts under both.
+- **Index cache** at `~/.claude/ccpane-index.v4.json`, keyed by file
+  mtime+size (transcript plus its subagent files). First scan of all sessions takes a few seconds; after that it's
   ~instant. (Kept as JSON rather than SQLite: at this scale it's already
   <20ms and keeps the binary cgo-free and portable.)
 - **HTML export** is one file styled like the Hash-Sec admin dashboard: sharp
@@ -125,6 +167,9 @@ bind C-p split-window -h -l 40% -c "#{pane_current_path}" "ccpane"
 - Subagents are loaded from `<session>/subagents/` and shown as their own
   subtrees; not yet linked to the exact `Task` call that spawned them.
 - The live pane re-reads the whole transcript on change (fine at these sizes).
+- Stats cover transcripts still on disk. Claude Code's own all-time counters
+  keep counting sessions whose transcripts it has since deleted, so its totals
+  are larger; the overview says what range the surviving files actually cover.
 
 ## Layout
 
@@ -135,4 +180,5 @@ internal/transcript/          parsing core (no UI deps)
 internal/ui/                  Bubble Tea layer
   pane, browser, sessionview, treeview, report, styles, uiutil, debug
 internal/export/html.go       self-contained HTML exporter
+internal/snapshot/            timestamped tar.gz archive of all transcripts
 ```

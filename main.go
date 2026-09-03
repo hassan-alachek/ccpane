@@ -11,6 +11,7 @@ import (
 
 	"github.com/hassan-alachek/ccpane/internal/export"
 	"github.com/hassan-alachek/ccpane/internal/pricing"
+	"github.com/hassan-alachek/ccpane/internal/snapshot"
 	"github.com/hassan-alachek/ccpane/internal/transcript"
 	"github.com/hassan-alachek/ccpane/internal/ui"
 	"github.com/hassan-alachek/ccpane/internal/update"
@@ -47,6 +48,8 @@ func main() {
 	statsFlag := flag.Bool("stats", false, "show usage stats and graphs")
 	memFlag := flag.Bool("memory", false, "browse project auto-memories")
 	flag.BoolVar(memFlag, "m", false, "shorthand for --memory")
+	snapFlag := flag.Bool("snapshot", false, "archive all transcripts to a timestamped tar.gz and exit (copies only, deletes nothing)")
+	snapOut := flag.String("out", "", "snapshot destination: a directory or an explicit .tar.gz path")
 	updateFlag := flag.Bool("update", false, "update ccpane to the latest release and exit")
 	showVer := flag.Bool("version", false, "print version and exit")
 	flag.BoolVar(showVer, "v", false, "print version (shorthand)")
@@ -62,6 +65,20 @@ func main() {
 			fmt.Fprintln(os.Stderr, "ccpane:", err)
 			os.Exit(1)
 		}
+		return
+	}
+
+	if *snapFlag {
+		res, err := snapshot.Create(*snapOut, version)
+		fail(err)
+		fmt.Printf("snapshot → %s\n", res.Path)
+		fmt.Printf("  %d transcripts (%d sessions · %d subagents)  %s → %s\n",
+			res.Files, res.Sessions, res.Subagents, res.Oldest, res.Newest)
+		fmt.Printf("  %s compressed from %s", humanBytes(res.Size), humanBytes(res.Raw))
+		if res.StatsCache {
+			fmt.Print("  · includes Claude Code's cumulative stats-cache.json")
+		}
+		fmt.Println()
 		return
 	}
 
@@ -149,6 +166,20 @@ func resume(s *transcript.Session) {
 		fmt.Fprintln(os.Stderr, "ccpane: resume failed:", err)
 		os.Exit(1)
 	}
+}
+
+// humanBytes formats a byte count for the snapshot summary.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for v := n / unit; v >= unit && exp < 3; v /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGT"[exp])
 }
 
 func parseWH(s string) (int, int) {
