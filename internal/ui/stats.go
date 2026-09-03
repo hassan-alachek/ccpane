@@ -131,6 +131,8 @@ type rangeAgg struct {
 	perDay   map[string]int                    // deduplicated tokens per UTC day
 	rawTotal int                               // undeduplicated total (what /usage shows)
 	sessions int
+	files    int    // transcripts on disk, including ones with no billable usage
+	firstDay string // earliest UTC day any surviving transcript covers
 }
 
 // cutoff is the first UTC day included in the range. Claude Code uses
@@ -156,8 +158,14 @@ func (m statsModel) aggregate() rangeAgg {
 		perDay: map[string]int{},
 	}
 	for _, s := range m.sessions {
+		a.files++
 		var st transcript.Tokens
 		sm := transcript.ModelTokens{}
+		for d := range s.Daily {
+			if a.firstDay == "" || d < a.firstDay {
+				a.firstDay = d
+			}
+		}
 		for d, mt := range s.Daily {
 			if !m.inRange(d) {
 				continue
@@ -219,7 +227,9 @@ func (m statsModel) content(w int) string {
 		stDim.Render("  ("+fmtTok(a.tok.Input)+" in · "+fmtTok(a.tok.Output)+" out · "+fmtTok(a.tok.Cache())+" cache)") + "\n")
 	b.WriteString("  " + stDim.Render("est cost ") + accent(cYellow, "~"+money(a.cost)) +
 		stDim.Render("  "+priceNote()) + "\n")
-	b.WriteString(usageNote(a, w) + "\n")
+	b.WriteString(usageNote(a, w))
+	b.WriteString(m.coverageNote(a))
+	b.WriteString("\n")
 
 	b.WriteString(sectionTitle("Token composition") + "\n  ")
 	b.WriteString(compositionBar(a.tok, max(10, w-4)) + "\n")
@@ -272,6 +282,29 @@ func usageNote(a rangeAgg, w int) string {
 	return "  " + stDim.Render(fmt.Sprintf("ⓘ /usage → Stats reads %s here (%.2f×): it counts each API response",
 		fmtTok(a.rawTotal), ratio)) + "\n" +
 		"  " + stDim.Render("  once per transcript row. ccpane counts it once, matching /cost.") + "\n"
+}
+
+// coverageNote states how far back the surviving transcripts actually reach.
+// Claude Code deletes transcripts after cleanupPeriodDays (30 by default) while
+// its own counters keep counting the deleted ones, so "all time" here is not
+// the same all time /usage reports, and a range reaching past the oldest
+// surviving transcript is necessarily incomplete.
+func (m statsModel) coverageNote(a rangeAgg) string {
+	if a.firstDay == "" {
+		return ""
+	}
+	cut := m.cutoff()
+	if cut != "" && a.firstDay <= cut {
+		return "" // range is fully covered by transcripts still on disk
+	}
+	days := 1
+	if t, err := time.Parse("2006-01-02", a.firstDay); err == nil {
+		days = int(time.Since(t).Hours()/24) + 1
+	}
+	return "  " + stDim.Render(fmt.Sprintf("ⓘ covers %d transcripts on disk, back to %s (%d days). Claude Code",
+		a.files, a.firstDay, days)) + "\n" +
+		"  " + stDim.Render("  deletes transcripts after cleanupPeriodDays (default 30); its own") + "\n" +
+		"  " + stDim.Render("  session and token counters keep counting the deleted ones.") + "\n"
 }
 
 func hasAnyAttr(attr map[string]transcript.ModelTokens) bool {
