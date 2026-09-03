@@ -2,6 +2,7 @@ package transcript
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -141,6 +142,7 @@ func ScanSession(path string, exclude map[string]bool) *Session {
 // IndexSessions returns metadata for every session on the machine, using an
 // on-disk cache keyed by (mtime,size). Sorted newest-first.
 func IndexSessions() []*Session {
+	pruneOldCaches()
 	paths := AllTranscripts()
 	cache := loadCache()
 	out := make([]*Session, 0, len(paths))
@@ -254,12 +256,44 @@ func sessionStamp(path string) (mtime, size int64) {
 	return mtime, size
 }
 
-// cachePath is versioned so schema changes invalidate stale caches cleanly.
+// cacheVersion is the on-disk index schema. Bump it whenever Session's shape
+// changes, so an older cache is ignored rather than misread.
+//
 // v5: per-day/per-model buckets, deduplicated by message id, with the
 // undeduplicated rows kept per model too.
+const cacheVersion = 5
+
+// cachePath is versioned so schema changes invalidate stale caches cleanly.
 func cachePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "ccpane-index.v5.json")
+	return filepath.Join(home, ".claude", fmt.Sprintf("ccpane-index.v%d.json", cacheVersion))
+}
+
+// pruneOldCaches removes index caches left by earlier ccpane versions. Bumping
+// cacheVersion orphans the previous file rather than replacing it, so without
+// this they accumulate one dead file per schema change — a megabyte by v5.
+//
+// A genuinely older ccpane running alongside this one would rebuild its own
+// cache afterwards; that costs one rescan, which is cheaper than never
+// reclaiming the space.
+func pruneOldCaches() {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(home, ".claude")
+	keep := cachePath()
+	for _, pat := range []string{"ccpane-index.json", "ccpane-index.v*.json"} {
+		matches, err := filepath.Glob(filepath.Join(dir, pat))
+		if err != nil {
+			continue
+		}
+		for _, m := range matches {
+			if m != keep {
+				os.Remove(m)
+			}
+		}
+	}
 }
 
 func loadCache() map[string]*Session {
