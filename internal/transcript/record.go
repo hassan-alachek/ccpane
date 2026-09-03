@@ -17,6 +17,15 @@ type Record struct {
 	Timestamp   string   `json:"timestamp"`
 	Message     *Message `json:"message"`
 
+	// Attribution names the harness operation a turn ran under. Claude Code
+	// sets these per API response; a turn can carry several at once (a skill
+	// that calls an MCP tool), so they are overlapping characteristics rather
+	// than a partition.
+	AttributionAgent     string `json:"attributionAgent"`
+	AttributionSkill     string `json:"attributionSkill"`
+	AttributionMcpServer string `json:"attributionMcpServer"`
+	AttributionMcpTool   string `json:"attributionMcpTool"`
+
 	// metadata-record variants
 	AiTitle     string `json:"aiTitle"`
 	CustomTitle string `json:"customTitle"`

@@ -85,13 +85,25 @@ func fetch() []byte {
 	return b
 }
 
-// build extracts Claude model rates (per-million tokens) keyed by base name.
+// build extracts Claude model rates (per-million tokens) keyed by the model
+// id's base name.
+//
+// LiteLLM lists the same model under many providers and regions
+// ("claude-opus-4-5", "bedrock/us-gov-west-1/anthropic.claude-opus-4-5"), which
+// all collapse to one base name at different prices. Preferring the unprefixed
+// entry, then an anthropic/ one, keeps the estimate on first-party list pricing
+// and stable between runs — otherwise whichever key Go's randomised map order
+// visited last wins, and usage can silently be priced at GovCloud rates.
 func build(data []byte) map[string]transcript.Pricing {
 	var raw map[string]entry
 	if json.Unmarshal(data, &raw) != nil {
 		return nil
 	}
-	out := map[string]transcript.Pricing{}
+	type cand struct {
+		key string
+		e   entry
+	}
+	best := map[string]cand{}
 	for k, e := range raw {
 		if !strings.Contains(k, "claude") || (e.Input == 0 && e.Output == 0) {
 			continue
@@ -100,12 +112,42 @@ func build(data []byte) map[string]transcript.Pricing {
 		if i := strings.LastIndex(k, "/"); i >= 0 {
 			base = k[i+1:]
 		}
+		if cur, ok := best[base]; ok && !preferKey(k, cur.key) {
+			continue
+		}
+		best[base] = cand{k, e}
+	}
+	out := make(map[string]transcript.Pricing, len(best))
+	for base, c := range best {
 		out[base] = transcript.Pricing{
-			InputPerM:      e.Input * 1e6,
-			OutputPerM:     e.Output * 1e6,
-			CacheWritePerM: e.CacheWrite * 1e6,
-			CacheReadPerM:  e.CacheRead * 1e6,
+			InputPerM:      c.e.Input * 1e6,
+			OutputPerM:     c.e.Output * 1e6,
+			CacheWritePerM: c.e.CacheWrite * 1e6,
+			CacheReadPerM:  c.e.CacheRead * 1e6,
 		}
 	}
 	return out
+}
+
+// preferKey reports whether LiteLLM key a should win over b for the same base
+// model name.
+func preferKey(a, b string) bool {
+	ra, rb := providerRank(a), providerRank(b)
+	if ra != rb {
+		return ra < rb
+	}
+	return a < b
+}
+
+// providerRank orders keys by how canonical their pricing is: a bare model id,
+// then anthropic/, then any other provider or region.
+func providerRank(k string) int {
+	switch {
+	case !strings.Contains(k, "/"):
+		return 0
+	case strings.HasPrefix(k, "anthropic/"):
+		return 1
+	default:
+		return 2
+	}
 }

@@ -109,6 +109,25 @@ func SubagentDir(mainPath string) string {
 	return strings.TrimSuffix(mainPath, ".jsonl") + string(os.PathSeparator) + "subagents"
 }
 
+// SubagentTranscripts returns the subagent transcripts spawned by a session.
+// Their tokens belong to the session that ran them, so usage accounting has to
+// read them; AllTranscripts deliberately leaves them out of the session list.
+func SubagentTranscripts(mainPath string) []string {
+	dir := SubagentDir(mainPath)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		out = append(out, filepath.Join(dir, e.Name()))
+	}
+	return out
+}
+
 func newestJSONL(dir string) string {
 	entries, err := os.ReadDir(dir)
 	if err != nil {

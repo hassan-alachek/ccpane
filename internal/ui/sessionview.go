@@ -44,7 +44,7 @@ func (sv *sessionView) reload() {
 	if err != nil {
 		return
 	}
-	sv.stats = transcript.Aggregate(recs)
+	sv.stats = transcript.AggregateSession(sv.path, recs, nil, nil)
 	sv.title = transcript.SessionTitle(recs)
 	sv.cwd = transcript.SessionCwd(recs)
 	sv.gitBranch = transcript.SessionGitBranch(recs)
@@ -181,8 +181,8 @@ func (sv *sessionView) header() string {
 	ctxL := stDim.Render("ctx ") + barStr + " " +
 		barStyle(pct).Render(pctStr(pct)) + " " +
 		stDim.Render(fmtTok(sv.stats.ContextNow)+"/"+fmtTok(win))
-	ctxR := stDim.Render("out ") + stFg.Render(fmtTok(sv.stats.OutputTokens)) + "  " +
-		lipgloss.NewStyle().Foreground(cYellow).Render("~"+money(sv.stats.EstCost(transcript.PricingFor(sv.stats.Model))))
+	ctxR := stDim.Render("out ") + stFg.Render(fmtTok(sv.stats.Output)) + "  " +
+		lipgloss.NewStyle().Foreground(cYellow).Render("~"+money(sv.stats.Cost()))
 	line2 := spread(ctxL, ctxR, w)
 
 	meta := []string{}
@@ -192,7 +192,7 @@ func (sv *sessionView) header() string {
 	if sv.gitBranch != "" {
 		meta = append(meta, "⎇ "+sv.gitBranch)
 	}
-	meta = append(meta, fmt.Sprintf("%d turns", sv.stats.Turns))
+	meta = append(meta, fmt.Sprintf("%d turns", sv.stats.Turns()))
 	line3 := stDim.Render(strings.Join(meta, "  ·  "))
 
 	sep := stGuide.Render(strings.Repeat("─", w))

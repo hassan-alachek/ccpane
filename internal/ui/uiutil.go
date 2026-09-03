@@ -25,6 +25,23 @@ func fmtTok(n int) string {
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
+// count formats an exact integer with thousands separators, for values where
+// fmtTok's rounding would lose the point (request counts, session counts).
+func count(n int) string {
+	s := strconv.Itoa(n)
+	if n < 0 {
+		return "-" + count(-n)
+	}
+	var b strings.Builder
+	for i, c := range s {
+		if i > 0 && (len(s)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(c)
+	}
+	return b.String()
+}
+
 func money(v float64) string { return fmt.Sprintf("$%.2f", v) }
 
 // truncate shortens s to w runes with an ellipsis (plain text only).

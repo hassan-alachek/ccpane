@@ -119,79 +119,207 @@ func (m statsModel) View() string {
 	return title + "\n" + m.vp.View() + "\n" + help
 }
 
-func (m statsModel) content(w int) string {
-	var in, out, cache, n int
-	var cost float64
-	proj := map[string]*statAgg{}
-	model := map[string]int{}
-	day := map[string]int{}
+// rangeAgg is everything the view needs for the selected date range. Each
+// session contributes only the days that fall inside the range, so a session
+// spanning weeks lands its tokens on the days they were actually spent.
+type rangeAgg struct {
+	tok      transcript.Tokens
+	cost     float64
+	models   transcript.ModelTokens
+	proj     map[string]*statAgg
+	attr     map[string]transcript.ModelTokens // attribution key -> per-model usage
+	perDay   map[string]int                    // deduplicated tokens per UTC day
+	rawTotal int                               // undeduplicated total (what /usage shows)
+	sessions int
+}
 
+// cutoff is the first UTC day included in the range. Claude Code uses
+// today-N+1, so "7d" means today plus the previous six days.
+func (m statsModel) cutoff() string {
+	if m.rangeDays <= 0 {
+		return ""
+	}
+	return time.Now().UTC().AddDate(0, 0, -(m.rangeDays - 1)).Format("2006-01-02")
+}
+
+// inRange compares YYYY-MM-DD day keys, for which string order is date order.
+func (m statsModel) inRange(day string) bool {
+	c := m.cutoff()
+	return c == "" || day >= c
+}
+
+func (m statsModel) aggregate() rangeAgg {
+	a := rangeAgg{
+		models: transcript.ModelTokens{},
+		proj:   map[string]*statAgg{},
+		attr:   map[string]transcript.ModelTokens{},
+		perDay: map[string]int{},
+	}
 	for _, s := range m.sessions {
-		if !m.inRange(s.LastTS) {
-			continue
+		var st transcript.Tokens
+		sm := transcript.ModelTokens{}
+		for d, mt := range s.Daily {
+			if !m.inRange(d) {
+				continue
+			}
+			for model, t := range mt {
+				st.Add(t)
+				sm.Add(model, t)
+				a.perDay[d] += t.Total()
+			}
 		}
-		n++
-		in += s.InputTokens
-		out += s.OutputTokens
-		cache += s.CacheCreation + s.CacheRead
-		cost += s.Cost()
-		a := proj[s.Project]
-		if a == nil {
-			a = &statAgg{}
-			proj[s.Project] = a
+		if st.Requests == 0 {
+			continue // no activity inside the range
 		}
-		a.tok += s.TotalTokens()
-		a.cost += s.Cost()
-		a.n++
-		if s.Model != "" {
-			model[s.Model] += s.TotalTokens()
+		a.sessions++
+		a.tok.Add(st)
+		a.models.Merge(sm)
+		cost := sm.Cost()
+		a.cost += cost
+
+		pa := a.proj[s.Project]
+		if pa == nil {
+			pa = &statAgg{}
+			a.proj[s.Project] = pa
 		}
-		if d := dayKey(s.LastTS); d != "" {
-			day[d]++
+		pa.tok += st.Total()
+		pa.cost += cost
+		pa.n++
+
+		for d, rows := range s.Rows {
+			if m.inRange(d) {
+				a.rawTotal += rows
+			}
+		}
+		for d, byKey := range s.Attr {
+			if !m.inRange(d) {
+				continue
+			}
+			for key, mt := range byKey {
+				if a.attr[key] == nil {
+					a.attr[key] = transcript.ModelTokens{}
+				}
+				a.attr[key].Merge(mt)
+			}
 		}
 	}
-	total := in + out + cache
+	return a
+}
 
+func (m statsModel) content(w int) string {
+	a := m.aggregate()
 	var b strings.Builder
 	b.WriteString(rangeTabs(m.rangeDays) + "\n\n")
 
 	b.WriteString(sectionTitle("Overview") + "\n")
-	b.WriteString("  " + stDim.Render("sessions ") + stFg.Render(itoa(n)) +
-		stDim.Render("    projects ") + stFg.Render(itoa(len(proj))) + "\n")
-	b.WriteString("  " + stDim.Render("tokens   ") + accent(cCyan, fmtTok(total)) +
-		stDim.Render("  ("+fmtTok(in)+" in · "+fmtTok(out)+" out · "+fmtTok(cache)+" cache)") + "\n")
-	b.WriteString("  " + stDim.Render("est cost ") + accent(cYellow, "~"+money(cost)) +
-		stDim.Render("  "+priceNote()) + "\n\n")
+	b.WriteString("  " + stDim.Render("sessions ") + stFg.Render(itoa(a.sessions)) +
+		stDim.Render("    projects ") + stFg.Render(itoa(len(a.proj))) +
+		stDim.Render("    requests ") + stFg.Render(count(a.tok.Requests)) + "\n")
+	b.WriteString("  " + stDim.Render("tokens   ") + accent(cCyan, fmtTok(a.tok.Total())) +
+		stDim.Render("  ("+fmtTok(a.tok.Input)+" in · "+fmtTok(a.tok.Output)+" out · "+fmtTok(a.tok.Cache())+" cache)") + "\n")
+	b.WriteString("  " + stDim.Render("est cost ") + accent(cYellow, "~"+money(a.cost)) +
+		stDim.Render("  "+priceNote()) + "\n")
+	b.WriteString(usageNote(a, w) + "\n")
 
 	b.WriteString(sectionTitle("Token composition") + "\n  ")
-	b.WriteString(compositionBar(in, out, cache, max(10, w-4)) + "\n")
-	b.WriteString(compLegend(in, out, cache) + "\n\n")
+	b.WriteString(compositionBar(a.tok, max(10, w-4)) + "\n")
+	b.WriteString(compLegend(a.tok) + "\n\n")
 
 	sparkDays := m.rangeDays
 	if sparkDays == 0 {
 		sparkDays = 90
 	}
-	b.WriteString(sectionTitle(fmt.Sprintf("Activity — sessions/day, last %d days", sparkDays)) + "\n  ")
-	b.WriteString(spark(day, sparkDays) + "\n\n")
+	b.WriteString(sectionTitle(fmt.Sprintf("Tokens per day, last %d days", sparkDays)) + "\n  ")
+	b.WriteString(spark(a.perDay, sparkDays) + "\n\n")
+
+	b.WriteString(sectionTitle("Where the tokens go") + "\n")
+	b.WriteString(attrBars(a.attr, transcript.AttrSurface, w, 4, a.tok.Total()))
+	b.WriteString("\n")
+
+	for _, sec := range []struct{ dim, title string }{
+		{transcript.AttrAgent, "Subagents"},
+		{transcript.AttrSkill, "Skills"},
+		{transcript.AttrMCP, "MCP servers"},
+		{transcript.AttrTool, "MCP tools"},
+	} {
+		rows := attrBars(a.attr, sec.dim, w, 6, a.tok.Total())
+		if rows == "" {
+			continue
+		}
+		b.WriteString(sectionTitle(sec.title) + "\n" + rows + "\n")
+	}
+	if hasAnyAttr(a.attr) {
+		b.WriteString("  " + stDim.Render("overlapping characteristics, not a partition — a skill that calls an") + "\n")
+		b.WriteString("  " + stDim.Render("MCP tool counts under both") + "\n\n")
+	}
 
 	b.WriteString(sectionTitle("Top projects by tokens") + "\n")
-	b.WriteString(topProjects(proj, w))
+	b.WriteString(topProjects(a.proj, w))
 	b.WriteString("\n")
 
 	b.WriteString(sectionTitle("Models by tokens") + "\n")
-	b.WriteString(modelBars(model, w))
+	b.WriteString(modelBars(a.models, w))
 	return b.String()
 }
 
-func (m statsModel) inRange(ts string) bool {
-	if m.rangeDays <= 0 {
-		return true
+// usageNote reconciles ccpane's figure with Claude Code's /usage Stats tab,
+// which adds each API response once per transcript row rather than once.
+func usageNote(a rangeAgg, w int) string {
+	if a.rawTotal <= 0 || a.tok.Total() <= 0 || a.rawTotal <= a.tok.Total() {
+		return ""
 	}
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return false
+	ratio := float64(a.rawTotal) / float64(a.tok.Total())
+	return "  " + stDim.Render(fmt.Sprintf("ⓘ /usage → Stats reads %s here (%.2f×): it counts each API response",
+		fmtTok(a.rawTotal), ratio)) + "\n" +
+		"  " + stDim.Render("  once per transcript row. ccpane counts it once, matching /cost.") + "\n"
+}
+
+func hasAnyAttr(attr map[string]transcript.ModelTokens) bool {
+	for k := range attr {
+		if dim, _ := transcript.SplitAttrKey(k); dim != transcript.AttrSurface {
+			return true
+		}
 	}
-	return t.After(time.Now().AddDate(0, 0, -m.rangeDays))
+	return false
+}
+
+// attrBars renders the top n entries of one attribution dimension, as a share
+// of the range's total tokens.
+func attrBars(attr map[string]transcript.ModelTokens, dim string, w, n, total int) string {
+	type row struct {
+		name string
+		tok  int
+		cost float64
+	}
+	var rows []row
+	for k, mt := range attr {
+		d, name := transcript.SplitAttrKey(k)
+		if d != dim {
+			continue
+		}
+		t := mt.Total()
+		rows = append(rows, row{name, t.Total(), mt.Cost()})
+	}
+	if len(rows) == 0 {
+		return ""
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].tok > rows[j].tok })
+	if len(rows) > n {
+		rows = rows[:n]
+	}
+	if total <= 0 {
+		total = 1
+	}
+	nameW := 24
+	barW := max(10, w-nameW-30) // leave room for pct, tokens and cost
+	var b strings.Builder
+	for _, r := range rows {
+		share := float64(r.tok) / float64(total)
+		b.WriteString("  " + stFg.Render(padR(truncate(r.name, nameW), nameW)) + " " +
+			accent(cAccent, bar(share, barW)) + " " +
+			stDim.Render(fmt.Sprintf("%4.0f%%", share*100)+"  "+padL(fmtTok(r.tok), 6)+"  "+money(r.cost)) + "\n")
+	}
+	return b.String()
 }
 
 func rangeTabs(active int) string {
@@ -216,12 +344,12 @@ func sectionTitle(s string) string {
 
 func accent(c lipgloss.Color, s string) string { return lipgloss.NewStyle().Foreground(c).Render(s) }
 
-func compositionBar(in, out, cache, width int) string {
-	total := in + out + cache
+func compositionBar(t transcript.Tokens, width int) string {
+	total := t.Total()
 	if total <= 0 || width <= 0 {
 		return stDim.Render("(no data)")
 	}
-	vals := []int{in, out, cache}
+	vals := []int{t.Input, t.Output, t.Cache()}
 	cols := []lipgloss.Color{cAccent, cGreen, cDim}
 	w := make([]int, 3)
 	used := 0
@@ -262,25 +390,26 @@ func compositionBar(in, out, cache, width int) string {
 	return b.String()
 }
 
-func compLegend(in, out, cache int) string {
-	total := in + out + cache
+func compLegend(t transcript.Tokens) string {
+	total := t.Total()
 	if total == 0 {
 		total = 1
 	}
 	pct := func(v int) string { return fmt.Sprintf("%.1f%%", float64(v)/float64(total)*100) }
 	return "  " +
-		accent(cAccent, "█") + stDim.Render(" input "+fmtTok(in)+" "+pct(in)+"   ") +
-		accent(cGreen, "█") + stDim.Render(" output "+fmtTok(out)+" "+pct(out)+"   ") +
-		accent(cDim, "█") + stDim.Render(" cache "+fmtTok(cache)+" "+pct(cache))
+		accent(cAccent, "█") + stDim.Render(" input "+fmtTok(t.Input)+" "+pct(t.Input)+"   ") +
+		accent(cGreen, "█") + stDim.Render(" output "+fmtTok(t.Output)+" "+pct(t.Output)+"   ") +
+		accent(cDim, "█") + stDim.Render(" cache "+fmtTok(t.Cache())+" "+pct(t.Cache()))
 }
 
 func priceNote() string {
 	if transcript.PricingLoaded() {
-		return "(LiteLLM pricing)"
+		return "(LiteLLM pricing, per model)"
 	}
 	return "(estimate)"
 }
 
+// spark plots tokens per day over the trailing window.
 func spark(day map[string]int, days int) string {
 	if days < 1 {
 		days = 1
@@ -288,7 +417,7 @@ func spark(day map[string]int, days int) string {
 	runes := []rune(" ▁▂▃▄▅▆▇█")
 	vals := make([]int, days)
 	maxv := 1
-	now := time.Now()
+	now := time.Now().UTC()
 	for i := 0; i < days; i++ {
 		d := now.AddDate(0, 0, -(days - 1 - i)).Format("2006-01-02")
 		vals[i] = day[d]
@@ -307,7 +436,7 @@ func spark(day map[string]int, days int) string {
 		}
 		b.WriteRune(runes[idx])
 	}
-	return accent(cGreen, b.String()) + stDim.Render(fmt.Sprintf("  peak %d/day", maxv))
+	return accent(cGreen, b.String()) + stDim.Render("  peak "+fmtTok(maxv)+"/day")
 }
 
 func topProjects(proj map[string]*statAgg, w int) string {
@@ -343,42 +472,33 @@ func topProjects(proj map[string]*statAgg, w int) string {
 	return b.String()
 }
 
-func modelBars(model map[string]int, w int) string {
+func modelBars(model transcript.ModelTokens, w int) string {
+	type kv struct {
+		name string
+		tok  int
+		cost float64
+	}
+	var arr []kv
 	total := 0
-	for _, v := range model {
-		total += v
+	for k, t := range model {
+		arr = append(arr, kv{k, t.Total(), t.Cost(transcript.PricingFor(k))})
+		total += t.Total()
 	}
 	if total == 0 {
 		return "  " + stDim.Render("(no model data)") + "\n"
 	}
-	type kv struct {
-		name string
-		tok  int
-	}
-	arr := make([]kv, 0, len(model))
-	for k, v := range model {
-		arr = append(arr, kv{k, v})
-	}
 	sort.Slice(arr, func(i, j int) bool { return arr[i].tok > arr[j].tok })
 	maxTok := arr[0].tok
 	nameW := 22
-	barW := max(10, w-nameW-14)
+	barW := max(10, w-nameW-30) // leave room for pct, tokens and cost
 	var b strings.Builder
 	for _, x := range arr {
 		pct := float64(x.tok) / float64(total) * 100
 		b.WriteString("  " + stFg.Render(padR(shortModelSafe(x.name), nameW)) + " " +
 			accent(cGreen, bar(float64(x.tok)/float64(maxTok), barW)) + " " +
-			stDim.Render(fmt.Sprintf("%4.0f%%", pct)) + "\n")
+			stDim.Render(fmt.Sprintf("%4.0f%%", pct)+"  "+padL(fmtTok(x.tok), 6)+"  "+money(x.cost)) + "\n")
 	}
 	return b.String()
-}
-
-func dayKey(ts string) string {
-	t, err := time.Parse(time.RFC3339, ts)
-	if err != nil {
-		return ""
-	}
-	return t.Format("2006-01-02")
 }
 
 // RunStats launches the stats view standalone.

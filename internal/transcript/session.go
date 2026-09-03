@@ -7,39 +7,57 @@ import (
 	"sort"
 )
 
-// Session is summary metadata for one transcript, used by the browser.
+// Session is summary metadata for one transcript, used by the browser. Its
+// token counts cover the main transcript plus every subagent transcript the
+// session spawned, with each API response counted once.
 type Session struct {
-	Path          string `json:"path"`
-	SessionID     string `json:"sessionId"`
-	Project       string `json:"project"` // real cwd
-	Title         string `json:"title"`
-	GitBranch     string `json:"gitBranch"`
-	FirstTS       string `json:"firstTs"`
-	LastTS        string `json:"lastTs"`
-	Messages      int    `json:"messages"`
-	InputTokens   int    `json:"inputTokens"`
-	OutputTokens  int    `json:"outputTokens"`
-	CacheCreation int    `json:"cacheCreation"`
-	CacheRead     int    `json:"cacheRead"`
-	Model         string `json:"model"`
-	Mtime         int64  `json:"mtime"`
-	Size          int64  `json:"size"`
+	Path      string `json:"path"`
+	SessionID string `json:"sessionId"`
+	Project   string `json:"project"` // real cwd
+	Title     string `json:"title"`
+	GitBranch string `json:"gitBranch"`
+	FirstTS   string `json:"firstTs"`
+	LastTS    string `json:"lastTs"`
+	Messages  int    `json:"messages"`
+	Tokens           // deduplicated session totals
+
+	// Daily is deduplicated usage bucketed by UTC day and model. Range views
+	// filter on it, so a long session's tokens land on the days they were
+	// actually spent instead of all on its last day.
+	Daily map[string]ModelTokens `json:"daily"`
+	// Rows is the undeduplicated per-day total: what Claude Code's /usage
+	// Stats tab reports. Kept so the pane can show that difference.
+	Rows map[string]int `json:"rows"`
+	// Attr is deduplicated usage by UTC day, attribution key
+	// ("agent:Explore", "skill:artifact-design", "mcp:datadog", ...) and model.
+	Attr map[string]map[string]ModelTokens `json:"attr"`
+
+	// RespIDs are the message ids of every API response counted here, used to
+	// spot responses replayed into a forked or resumed session.
+	RespIDs []string `json:"respIds"`
+	// Excluded is how many ids an earlier session had already claimed when
+	// this session was last scanned, so the index can tell a stale correction.
+	Excluded int `json:"excluded"`
+
+	Model string `json:"model"`
+	Mtime int64  `json:"mtime"`
+	Size  int64  `json:"size"`
 }
 
 // TotalTokens is all token activity for the session.
-func (s *Session) TotalTokens() int {
-	return s.InputTokens + s.OutputTokens + s.CacheCreation + s.CacheRead
+func (s *Session) TotalTokens() int { return s.Total() }
+
+// ByModel folds Daily into per-model totals.
+func (s *Session) ByModel() ModelTokens {
+	m := ModelTokens{}
+	for _, mt := range s.Daily {
+		m.Merge(mt)
+	}
+	return m
 }
 
-// Cost is the estimated USD cost using the model's resolved rates.
-func (s *Session) Cost() float64 {
-	return Stats{
-		InputTokens:   s.InputTokens,
-		OutputTokens:  s.OutputTokens,
-		CacheCreation: s.CacheCreation,
-		CacheRead:     s.CacheRead,
-	}.EstCost(PricingFor(s.Model))
-}
+// Cost is the estimated USD cost, priced per model.
+func (s *Session) Cost() float64 { return s.ByModel().Cost() }
 
 // Group is a set of sessions sharing a project directory.
 type Group struct {
@@ -75,20 +93,25 @@ func GroupByProject(sessions []*Session) []Group {
 	return groups
 }
 
-// ScanSession parses a transcript and derives its summary metadata.
-func ScanSession(path string) *Session {
+// ScanSession parses a transcript and derives its summary metadata. exclude
+// may name responses already counted by an earlier session (replayed history in
+// a fork or resume); pass nil to count everything the transcript holds.
+func ScanSession(path string, exclude map[string]bool) *Session {
 	recs, err := ParseFile(path)
 	if err != nil || len(recs) == 0 {
 		return nil
 	}
-	st := Aggregate(recs)
+	sink := NewSink()
+	st := AggregateSession(path, recs, sink, exclude)
 	s := &Session{
-		Path:          path,
-		InputTokens:   st.InputTokens,
-		OutputTokens:  st.OutputTokens,
-		CacheCreation: st.CacheCreation,
-		CacheRead:     st.CacheRead,
-		Model:         st.Model,
+		Path:     path,
+		Tokens:   st.Tokens,
+		Daily:    sink.Daily,
+		Rows:     sink.Rows,
+		Attr:     sink.Attr,
+		RespIDs:  sink.IDs,
+		Excluded: len(exclude),
+		Model:    st.Model,
 	}
 	for _, r := range recs {
 		if r.SessionID != "" && s.SessionID == "" {
@@ -125,22 +148,25 @@ func IndexSessions() []*Session {
 
 	for _, p := range paths {
 		live[p] = true
-		fi, err := os.Stat(p)
-		if err != nil {
+		mtime, size := sessionStamp(p)
+		if mtime == 0 {
 			continue
 		}
-		if c, ok := cache[p]; ok && c.Mtime == fi.ModTime().UnixNano() && c.Size == fi.Size() {
+		if c, ok := cache[p]; ok && c.Mtime == mtime && c.Size == size {
 			out = append(out, c)
 			continue
 		}
-		s := ScanSession(p)
+		s := ScanSession(p, nil)
 		if s == nil {
 			continue
 		}
-		s.Mtime = fi.ModTime().UnixNano()
-		s.Size = fi.Size()
+		s.Mtime = mtime
+		s.Size = size
 		cache[p] = s
 		out = append(out, s)
+		changed = true
+	}
+	if dedupeForks(out, cache) {
 		changed = true
 	}
 	for p := range cache {
@@ -156,10 +182,82 @@ func IndexSessions() []*Session {
 	return out
 }
 
+// dedupeForks strips responses that appear in more than one session. Resuming
+// or branching a session copies the earlier conversation into the new
+// transcript verbatim — same message ids, same uuids — but those API calls were
+// only ever billed once. The first session in a stable order keeps each
+// response; any later session holding it is rescanned without it.
+//
+// Ordering is by first activity then path: which of two forked siblings keeps a
+// shared response is arbitrary, but the machine-wide total is right either way.
+func dedupeForks(sessions []*Session, cache map[string]*Session) bool {
+	order := append([]*Session(nil), sessions...)
+	sort.Slice(order, func(i, j int) bool {
+		if order[i].FirstTS != order[j].FirstTS {
+			return order[i].FirstTS < order[j].FirstTS
+		}
+		return order[i].Path < order[j].Path
+	})
+
+	claimed := make(map[string]bool, 4096)
+	changed := false
+	for _, s := range order {
+		var dup map[string]bool
+		for _, id := range s.RespIDs {
+			if claimed[id] {
+				if dup == nil {
+					dup = map[string]bool{}
+				}
+				dup[id] = true
+			}
+		}
+		for _, id := range s.RespIDs {
+			claimed[id] = true
+		}
+		if len(dup) == s.Excluded {
+			continue // already scanned against this many duplicates
+		}
+		re := ScanSession(s.Path, dup)
+		if re == nil {
+			continue
+		}
+		re.Mtime, re.Size = s.Mtime, s.Size
+		re.SessionID, re.Project, re.Title = s.SessionID, s.Project, s.Title
+		re.GitBranch, re.FirstTS, re.LastTS, re.Messages = s.GitBranch, s.FirstTS, s.LastTS, s.Messages
+		*s = *re
+		cache[s.Path] = s
+		changed = true
+	}
+	return changed
+}
+
+// sessionStamp fingerprints a transcript together with the subagent
+// transcripts counted alongside it, so the index cache invalidates when either
+// changes. Returns a zero mtime if the main transcript is unreadable.
+func sessionStamp(path string) (mtime, size int64) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0, 0
+	}
+	mtime, size = fi.ModTime().UnixNano(), fi.Size()
+	for _, p := range SubagentTranscripts(path) {
+		si, err := os.Stat(p)
+		if err != nil {
+			continue
+		}
+		if m := si.ModTime().UnixNano(); m > mtime {
+			mtime = m
+		}
+		size += si.Size()
+	}
+	return mtime, size
+}
+
 // cachePath is versioned so schema changes invalidate stale caches cleanly.
+// v4: per-day/per-model buckets, deduplicated by message id.
 func cachePath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".claude", "ccpane-index.v3.json")
+	return filepath.Join(home, ".claude", "ccpane-index.v4.json")
 }
 
 func loadCache() map[string]*Session {

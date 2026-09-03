@@ -13,7 +13,7 @@ func PrintSessionStat(path string, limit int) {
 		fmt.Println("error:", err)
 		return
 	}
-	st := transcript.Aggregate(recs)
+	st := transcript.AggregateSession(path, recs, nil, nil)
 	win := limit
 	if win <= 0 {
 		win = transcript.AutoWindow(st.MaxContext)
@@ -28,8 +28,8 @@ func PrintSessionStat(path string, limit int) {
 	fmt.Printf("Branch  : %s\n", transcript.SessionGitBranch(recs))
 	fmt.Printf("Model   : %s\n", st.Model)
 	fmt.Printf("Context : %d / %d tokens (%.0f%%)  [window auto]\n", st.ContextNow, win, pct)
-	fmt.Printf("Tokens  : in %d  out %d  cacheW %d  cacheR %d\n", st.InputTokens, st.OutputTokens, st.CacheCreation, st.CacheRead)
-	fmt.Printf("Turns   : %d   est cost ~$%.2f\n\n", st.Turns, st.EstCost(transcript.PricingFor(st.Model)))
+	fmt.Printf("Tokens  : in %d  out %d  cacheW %d  cacheR %d\n", st.Input, st.Output, st.CacheWrite, st.CacheRead)
+	fmt.Printf("Turns   : %d   est cost ~$%.2f\n\n", st.Turns(), st.Cost())
 
 	for _, line := range transcript.RenderTreeLines(transcript.FullTree(path)) {
 		fmt.Println(line)

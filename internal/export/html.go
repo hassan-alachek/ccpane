@@ -22,7 +22,7 @@ func WriteHTML(path string, window int, outPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	st := transcript.Aggregate(recs)
+	st := transcript.AggregateSession(path, recs, nil, nil)
 	if window <= 0 {
 		window = transcript.AutoWindow(st.MaxContext)
 	}
@@ -44,9 +44,9 @@ func WriteHTML(path string, window int, outPath string) (string, error) {
 		Branch:    transcript.SessionGitBranch(recs),
 		Context:   st.ContextNow,
 		Window:    window,
-		OutTokens: st.OutputTokens,
-		Cost:      st.EstCost(transcript.PricingFor(st.Model)),
-		Turns:     st.Turns,
+		OutTokens: st.Output,
+		Cost:      st.Cost(),
+		Turns:     st.Turns(),
 	}, transcript.FullTree(path))
 	if err := os.WriteFile(abs, []byte(doc), 0o644); err != nil {
 		return "", err

@@ -149,7 +149,10 @@ func SubagentTrees(mainPath string) []*Node {
 		if err != nil || len(recs) == 0 {
 			continue
 		}
-		st := Aggregate(recs)
+		// A subagent transcript's records are all flagged isSidechain, which
+		// is the norm inside its own file, so count them directly.
+		st := Stats{ByModel: ModelTokens{}}
+		accumulate(recs, false, map[string]bool{}, nil, &st, nil)
 		id := strings.TrimSuffix(strings.TrimPrefix(e.Name(), "agent-"), ".jsonl")
 		prompt := firstUserText(recs)
 		out = append(out, &Node{
@@ -158,7 +161,7 @@ func SubagentTrees(mainPath string) []*Node {
 			Label:    id,
 			Detail:   firstLine(prompt, 80),
 			Full:     prompt,
-			Tokens:   st.OutputTokens,
+			Tokens:   st.Output,
 			Children: BuildDisplayTree(recs),
 		})
 	}
